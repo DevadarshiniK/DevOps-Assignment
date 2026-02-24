@@ -115,3 +115,15 @@ variable "frontend_domain" {
   type        = string
   default     = ""
 }
+
+variable "github_repo_owner" {
+  description = "GitHub repository owner (username or organization)"
+  type        = string
+  default     = "DevadarshiniK"
+}
+
+variable "github_repo_name" {
+  description = "GitHub repository name"
+  type        = string
+  default     = "DevOps-Assignment"
+}
