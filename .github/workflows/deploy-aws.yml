@@ -48,7 +48,7 @@ jobs:
 
       - name: Build and deploy frontend
         env:
-          NEXT_PUBLIC_API_URL: http://${{ secrets.AWS_ALB_DNS_NAME }}
+          NEXT_PUBLIC_API_URL: https://${{ secrets.AWS_ALB_DNS_NAME }}
         run: |
           cd frontend
           npm ci
