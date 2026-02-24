@@ -1,3 +1,16 @@
+# GitHub OIDC Provider - ADD THIS AT THE TOP
+resource "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
+# Get current AWS account ID (keep this if you have it, add if not)
+
 resource "aws_iam_role" "ecs_task_execution" {
   name = "${var.project_name}-ecs-task-execution-${var.environment}"
 
@@ -46,7 +59,7 @@ resource "aws_iam_role" "github_actions" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
+          Federated = aws_iam_openid_connect_provider.github.arn  # Changed to use the OIDC provider resource
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {

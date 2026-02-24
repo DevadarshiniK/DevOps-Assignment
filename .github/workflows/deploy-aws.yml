@@ -1,0 +1,125 @@
+name: Deploy to AWS Dev
+
+on:
+  push:
+    branches:
+      - develop  # Only triggers on develop branch
+  workflow_dispatch:  # Manual trigger
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: devops-assignment-backend
+  TARGET_ENV: dev  # Fixed to dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev  # Uses your existing dev environment secrets
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          role-session-name: github-actions-${{ github.sha }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -f infrastructure/docker/Dockerfile.backend \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Deploy frontend to S3
+        env:
+          S3_BUCKET: ${{ secrets.AWS_S3_BUCKET_NAME }}  # Your existing secret
+        run: |
+          echo "Deploying to S3 bucket: $S3_BUCKET"
+          aws s3 sync frontend/out s3://$S3_BUCKET --delete
+
+      - name: Invalidate CloudFront
+        env:
+          DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}  # Your existing secret
+        run: |
+          if [ -n "$DISTRIBUTION_ID" ]; then
+            echo "Invalidating CloudFront distribution: $DISTRIBUTION_ID"
+            aws cloudfront create-invalidation \
+              --distribution-id $DISTRIBUTION_ID \
+              --paths "/*"
+          fi
+
+      - name: Update ECS service
+        env:
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}  # Your existing secret
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}  # Your existing secret
+        run: |
+          echo "Updating ECS service: $SERVICE"
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --force-new-deployment
+
+      - name: Health check
+        env:
+          ALB_DNS: ${{ secrets.AWS_ALB_DNS_NAME }}  # Your existing secret
+        run: |
+          echo "Health checking: http://$ALB_DNS/api/health"
+          for i in {1..30}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health")
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✅ Backend is healthy"
+              exit 0
+            fi
+            echo "Attempt $i/30: Backend returned HTTP $HTTP_CODE, waiting..."
+            sleep 10
+          done
+          echo "❌ Backend health check failed"
+          exit 1
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "## ✅ Dev Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | URL/Name |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Backend API** | http://${{ secrets.AWS_ALB_DNS_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Frontend CDN** | ${{ secrets.AWS_CDN_ENDPOINT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **S3 Bucket** | ${{ secrets.AWS_S3_BUCKET_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Notify success
+        if: success()
+        run: |
+          echo "✅ Dev deployment successful!"
+          echo "Backend URL: http://${{ secrets.AWS_ALB_DNS_NAME }}"
+          echo "Frontend URL: ${{ secrets.AWS_CDN_ENDPOINT }}"
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          echo "❌ Dev deployment failed"
+          exit 1
