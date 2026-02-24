@@ -32,3 +32,8 @@ output "backend_bucket_name" {
   description = "Backend bucket name for CDN (S3 origin)"
   value       = aws_s3_bucket.frontend.bucket
 }
+
+output "alb_dns_name" {
+  description = "ALB DNS name"
+  value       = aws_lb.main.dns_name
+}
