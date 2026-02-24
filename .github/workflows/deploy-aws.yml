@@ -3,18 +3,18 @@ name: Deploy to AWS Dev
 on:
   push:
     branches:
-      - develop  # Only triggers on develop branch
-  workflow_dispatch:  # Manual trigger
+      - develop
+  workflow_dispatch:
 
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: devops-assignment-backend
-  TARGET_ENV: dev  # Fixed to dev
+  TARGET_ENV: dev
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev  # Uses your existing dev environment secrets
+    environment: dev
     permissions:
       contents: read
       id-token: write
@@ -45,19 +45,19 @@ jobs:
             .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
 
       - name: Build and deploy frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://${{ secrets.AWS_ALB_DNS_NAME }}
         run: |
           cd frontend
           npm ci
           npm run build
-          npx next export
           aws s3 sync out s3://${{ secrets.AWS_S3_BUCKET_NAME }} --delete
 
       - name: Invalidate CloudFront
         env:
-          DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}  # Your existing secret
+          DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           if [ -n "$DISTRIBUTION_ID" ]; then
             echo "Invalidating CloudFront distribution: $DISTRIBUTION_ID"
@@ -68,8 +68,8 @@ jobs:
 
       - name: Update ECS service
         env:
-          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}  # Your existing secret
-          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}  # Your existing secret
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}
         run: |
           echo "Updating ECS service: $SERVICE"
           aws ecs update-service \
@@ -79,7 +79,7 @@ jobs:
 
       - name: Health check
         env:
-          ALB_DNS: ${{ secrets.AWS_ALB_DNS_NAME }}  # Your existing secret
+          ALB_DNS: ${{ secrets.AWS_ALB_DNS_NAME }}
         run: |
           echo "Health checking: http://$ALB_DNS/api/health"
           for i in {1..30}; do
@@ -102,16 +102,16 @@ jobs:
           echo "| Resource | URL/Name |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|----------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Backend API** | http://${{ secrets.AWS_ALB_DNS_NAME }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Frontend CDN** | ${{ secrets.AWS_CDN_ENDPOINT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Frontend CDN** | https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **S3 Bucket** | ${{ secrets.AWS_S3_BUCKET_NAME }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit SHA** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          
+
       - name: Notify success
         if: success()
         run: |
           echo "✅ Dev deployment successful!"
           echo "Backend URL: http://${{ secrets.AWS_ALB_DNS_NAME }}"
-          echo "Frontend URL: ${{ secrets.AWS_CDN_ENDPOINT }}"
+          echo "Frontend URL: https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }}"
 
       - name: Notify failure
         if: failure()
