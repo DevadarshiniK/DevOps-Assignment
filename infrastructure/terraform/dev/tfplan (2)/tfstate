@@ -1,0 +1,73 @@
+{
+  "version": 4,
+  "terraform_version": "1.14.3",
+  "serial": 0,
+  "lineage": "",
+  "outputs": {
+    "backend_bucket_name": {
+      "value": "devops-assignment-frontend-dev-117204716629",
+      "type": "string"
+    },
+    "s3_bucket_name": {
+      "value": "devops-assignment-frontend-dev-117204716629",
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "mode": "data",
+      "type": "aws_availability_zones",
+      "name": "available",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "all_availability_zones": null,
+            "exclude_names": null,
+            "exclude_zone_ids": null,
+            "filter": null,
+            "group_names": [
+              "ap-south-1-zg-1"
+            ],
+            "id": "ap-south-1",
+            "names": [
+              "ap-south-1a",
+              "ap-south-1b",
+              "ap-south-1c"
+            ],
+            "state": "available",
+            "timeouts": null,
+            "zone_ids": [
+              "aps1-az1",
+              "aps1-az3",
+              "aps1-az2"
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "117204716629",
+            "arn": "arn:aws:iam::117204716629:user/devadarshini",
+            "id": "117204716629",
+            "user_id": "AIDARWSPSBRKXOFOMTWKJ"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
