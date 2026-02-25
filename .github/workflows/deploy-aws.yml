@@ -13,9 +13,10 @@ on:
 
 env:
   AWS_REGION: ap-south-1
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REPOSITORY: ${{ secrets.AWS_ECR_REPOSITORY }}
   TARGET_ENV: dev
-  ECS_TASK_DEFINITION: devops-assignment-backend  # Task definition family name
+  ECS_TASK_DEFINITION: devops-assignment-backend
 
 jobs:
   deploy:
@@ -39,7 +40,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ============ BACKEND DEPLOYMENT (with A's versioning) ============
+      # ============ BACKEND DEPLOYMENT (with working versioning) ============
       - name: Build and push backend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -53,29 +54,44 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # ECS Task Definition versioning (like in A)
+      # ECS Task Definition versioning
       - name: Get current task definition
         run: |
           aws ecs describe-task-definition \
             --task-definition ${{ env.ECS_TASK_DEFINITION }} \
             --region ${{ env.AWS_REGION }} \
-            --query 'taskDefinition' > task-def-full.json
+            --query taskDefinition > task-def.json
 
-      - name: Clean task definition for re-registration
+      - name: Filter task definition for registration
         run: |
-          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' task-def-full.json > task-def-clean.json
-          cat task-def-clean.json
+          jq '{ 
+            family: .family,
+            taskRoleArn: .taskRoleArn,
+            executionRoleArn: .executionRoleArn,
+            networkMode: .networkMode,
+            containerDefinitions: .containerDefinitions,
+            requiresCompatibilities: .requiresCompatibilities,
+            cpu: .cpu,
+            memory: .memory,
+            placementConstraints: .placementConstraints,
+            volumes: .volumes
+          }' task-def.json > task-def-filtered.json
 
       - name: Update image in task definition
         run: |
-          jq ".containerDefinitions[0].image = \"${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}\"" task-def-clean.json > task-def-updated.json
+          jq ".containerDefinitions[0].image = \"${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}\"" task-def-filtered.json > task-def-updated.json
           cat task-def-updated.json
 
       - name: Register new task definition
+        id: register-task-def
         run: |
-          aws ecs register-task-definition \
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
             --cli-input-json file://task-def-updated.json \
-            --region ${{ env.AWS_REGION }}
+            --region ${{ env.AWS_REGION }} \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "task-def-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "Registered new task definition: $TASK_DEF_ARN"
 
       - name: Update ECS service
         env:
@@ -86,7 +102,7 @@ jobs:
           aws ecs update-service \
             --cluster $CLUSTER \
             --service $SERVICE \
-            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+            --task-definition ${{ steps.register-task-def.outputs.task-def-arn }} \
             --region ${{ env.AWS_REGION }}
 
       - name: Wait for ECS service to stabilize
@@ -157,7 +173,7 @@ jobs:
           echo "| **Frontend CDN** | https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **S3 Bucket** | ${{ secrets.AWS_S3_BUCKET_NAME }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit SHA** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Task Definition** | ${{ env.ECS_TASK_DEFINITION }}:${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Task Definition** | ${{ steps.register-task-def.outputs.task-def-arn }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify success
         if: success()
@@ -165,6 +181,7 @@ jobs:
           echo "✅ Dev deployment successful!"
           echo "Backend URL: http://${{ secrets.AWS_ALB_DNS_NAME }}"
           echo "Frontend URL: https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }}"
+          echo "Task Definition: ${{ steps.register-task-def.outputs.task-def-arn }}"
 
       - name: Notify failure
         if: failure()
