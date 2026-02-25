@@ -142,8 +142,8 @@ resource "aws_iam_role_policy" "github_actions" {
           "s3:DeleteObject"
         ]
         Resource = [
-          "arn:aws:s3:::${var.project_name}-frontend-${var.environment}",
-          "arn:aws:s3:::${var.project_name}-frontend-${var.environment}/*"
+          "arn:aws:s3:::devops-assignment-frontend-dev-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::devops-assignment-frontend-dev-${data.aws_caller_identity.current.account_id}/*"
         ]
       },
       {
