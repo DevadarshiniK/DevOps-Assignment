@@ -106,7 +106,7 @@ resource "aws_iam_role_policy" "github_actions" {
           "ecr:DescribeImages",
           "ecr:DescribeRepositories"
         ]
-        Resource = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.project_name}-backend"
+        Resource = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/*"
       },
       {
         Sid    = "ECSUpdate"
