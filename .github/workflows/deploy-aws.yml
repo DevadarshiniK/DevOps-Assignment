@@ -127,9 +127,7 @@ jobs:
         working-directory: ./frontend
         env:
           NEXT_PUBLIC_API_URL: http://${{ secrets.AWS_ALB_DNS_NAME }}
-        run: |
-          npm run build
-          npm run export
+        run: npm run build
 
       - name: Upload frontend to S3
         run: |
