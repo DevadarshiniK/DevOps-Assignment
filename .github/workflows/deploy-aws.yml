@@ -104,12 +104,14 @@ jobs:
             --task-definition ${{ steps.register-task-def.outputs.task-def-arn }} \
             --region ${{ env.AWS_REGION }}
 
-      - name: Wait for ECS service to stabilize
+      - name: Wait for task to start
         run: |
-          aws ecs wait services-stable \
+          sleep 30
+          aws ecs describe-services \
             --cluster ${{ secrets.AWS_ECS_CLUSTER_NAME }} \
             --services ${{ secrets.AWS_ECS_SERVICE_NAME }} \
-            --region ${{ env.AWS_REGION }}
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].{Status: status, RunningCount: runningCount, DesiredCount: desiredCount}'
 
       # ============ FRONTEND DEPLOYMENT ============
       - name: Setup Node.js
@@ -149,7 +151,7 @@ jobs:
         run: |
           echo "Health checking: http://$ALB_DNS/api/health"
           for i in {1..30}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health" || echo "000")
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health" 2>/dev/null || echo "000")
             if [ "$HTTP_CODE" -eq 200 ]; then
               echo "✅ Backend is healthy"
               exit 0

@@ -34,6 +34,16 @@ resource "aws_ecr_lifecycle_policy" "backend" {
   })
 }
 
+# CloudWatch Log Group for ECS
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/${var.project_name}-${var.environment}"
+  retention_in_days = var.log_retention_days
+
+  tags = {
+    Name = "${var.project_name}-ecs-logs"
+  }
+}
+
 # ECS Cluster
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-cluster-${var.environment}"
@@ -60,19 +70,9 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
   }
 }
 
-# CloudWatch Log Group for ECS
-resource "aws_cloudwatch_log_group" "ecs" {
-  name              = "/ecs/${var.project_name}-${var.environment}"
-  retention_in_days = var.log_retention_days
-
-  tags = {
-    Name = "${var.project_name}-ecs-logs"
-  }
-}
-
 # ECS Task Definition
 resource "aws_ecs_task_definition" "backend" {
-  family                   = "${var.project_name}-backend-${var.environment}"
+  family                   = "${var.project_name}-backend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = var.task_cpu[var.environment]
@@ -145,7 +145,7 @@ resource "aws_ecs_service" "backend" {
   }
 }
 
-# App Auto Scaling - CORRECTED (was aws_autoscaling_target)
+# App Auto Scaling Target
 resource "aws_appautoscaling_target" "ecs_target" {
   max_capacity       = var.ecs_max_count[var.environment]
   min_capacity       = var.ecs_min_count[var.environment]
@@ -154,7 +154,7 @@ resource "aws_appautoscaling_target" "ecs_target" {
   service_namespace  = "ecs"
 }
 
-# Auto-scaling policy for CPU - CORRECTED
+# Auto-scaling policy for CPU
 resource "aws_appautoscaling_policy" "ecs_policy_cpu" {
   name               = "${var.project_name}-cpu-scaling-${var.environment}"
   policy_type        = "TargetTrackingScaling"
@@ -172,7 +172,7 @@ resource "aws_appautoscaling_policy" "ecs_policy_cpu" {
   }
 }
 
-# Auto-scaling policy for Memory - CORRECTED
+# Auto-scaling policy for Memory
 resource "aws_appautoscaling_policy" "ecs_policy_memory" {
   name               = "${var.project_name}-memory-scaling-${var.environment}"
   policy_type        = "TargetTrackingScaling"
@@ -188,4 +188,17 @@ resource "aws_appautoscaling_policy" "ecs_policy_memory" {
     scale_in_cooldown  = 300
     scale_out_cooldown = 300
   }
+}
+
+# Outputs
+output "ecs_cluster_name" {
+  value = aws_ecs_cluster.main.name
+}
+
+output "ecs_service_name" {
+  value = aws_ecs_service.backend.name
+}
+
+output "task_definition_arn" {
+  value = aws_ecs_task_definition.backend.arn
 }
