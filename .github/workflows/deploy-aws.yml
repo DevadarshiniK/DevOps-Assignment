@@ -13,8 +13,7 @@ on:
 
 env:
   AWS_REGION: ap-south-1
-  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY_NAME: ${{ secrets.AWS_ECR_REPOSITORY_NAME }}
+  ECR_REPOSITORY: devops-assignment-backend
   TARGET_ENV: dev
   ECS_TASK_DEFINITION: devops-assignment-backend
 
@@ -48,11 +47,11 @@ jobs:
         run: |
           docker build \
             -f infrastructure/docker/Dockerfile.backend \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY_NAME:latest \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY_NAME:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
             .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY_NAME:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY_NAME:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       # ECS Task Definition versioning
       - name: Get current task definition
@@ -79,7 +78,7 @@ jobs:
 
       - name: Update image in task definition
         run: |
-          jq ".containerDefinitions[0].image = \"${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY_NAME }}:${{ github.sha }}\"" task-def-filtered.json > task-def-updated.json
+          jq ".containerDefinitions[0].image = \"${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}\"" task-def-filtered.json > task-def-updated.json
           cat task-def-updated.json
 
       - name: Register new task definition
@@ -173,6 +172,7 @@ jobs:
           echo "| **Frontend CDN** | https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **S3 Bucket** | ${{ secrets.AWS_S3_BUCKET_NAME }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit SHA** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Task Definition** | ${{ steps.register-task-def.outputs.task-def-arn }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify success
@@ -181,6 +181,7 @@ jobs:
           echo "✅ Dev deployment successful!"
           echo "Backend URL: http://${{ secrets.AWS_ALB_DNS_NAME }}"
           echo "Frontend URL: https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }}"
+          echo "Image Tag: ${{ github.sha }}"
           echo "Task Definition: ${{ steps.register-task-def.outputs.task-def-arn }}"
 
       - name: Notify failure
