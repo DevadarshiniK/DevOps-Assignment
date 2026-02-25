@@ -14,7 +14,7 @@ on:
 env:
   AWS_REGION: ap-south-1
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY: ${{ secrets.AWS_ECR_REPOSITORY }}
+  ECR_REPOSITORY_NAME: ${{ secrets.AWS_ECR_REPOSITORY_NAME }}
   TARGET_ENV: dev
   ECS_TASK_DEFINITION: devops-assignment-backend
 
@@ -40,25 +40,19 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Debug ECR Repository
-        run: |
-          echo "ECR_REPOSITORY: $ECR_REPOSITORY"
-          echo "ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}"
-          echo "AWS_ACCOUNT_ID: $AWS_ACCOUNT_ID"
-
       # ============ BACKEND DEPLOYMENT ============
       - name: Build and push backend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          echo "Building image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker buildx build \
+          docker build \
             -f infrastructure/docker/Dockerfile.backend \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            --push \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY_NAME:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY_NAME:$IMAGE_TAG \
             .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_NAME:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY_NAME:$IMAGE_TAG
 
       # ECS Task Definition versioning
       - name: Get current task definition
@@ -85,7 +79,7 @@ jobs:
 
       - name: Update image in task definition
         run: |
-          jq ".containerDefinitions[0].image = \"${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}\"" task-def-filtered.json > task-def-updated.json
+          jq ".containerDefinitions[0].image = \"${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY_NAME }}:${{ github.sha }}\"" task-def-filtered.json > task-def-updated.json
           cat task-def-updated.json
 
       - name: Register new task definition
