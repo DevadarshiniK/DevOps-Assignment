@@ -68,7 +68,7 @@ resource "aws_iam_role" "github_actions" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:*"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo_owner}/${var.github_repo_name}:*"
           }
         }
       }
@@ -101,9 +101,12 @@ resource "aws_iam_role_policy" "github_actions" {
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
+          "ecr:CompleteLayerUpload",
+          "ecr:BatchGetImage",
+          "ecr:DescribeImages",
+          "ecr:DescribeRepositories"
         ]
-        Resource = aws_ecr_repository.backend.arn
+        Resource = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.project_name}-backend"
       },
       {
         Sid    = "ECSUpdate"
@@ -139,8 +142,8 @@ resource "aws_iam_role_policy" "github_actions" {
           "s3:DeleteObject"
         ]
         Resource = [
-          aws_s3_bucket.frontend.arn,
-          "${aws_s3_bucket.frontend.arn}/*"
+          "arn:aws:s3:::${var.project_name}-frontend-${var.environment}",
+          "arn:aws:s3:::${var.project_name}-frontend-${var.environment}/*"
         ]
       },
       {
@@ -149,7 +152,7 @@ resource "aws_iam_role_policy" "github_actions" {
         Action = [
           "cloudfront:CreateInvalidation"
         ]
-        Resource = aws_cloudfront_distribution.frontend.arn
+        Resource = "*"
       }
     ]
   })
