@@ -4,12 +4,18 @@ on:
   push:
     branches:
       - develop
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'infrastructure/docker/**'
+      - '.github/workflows/aws-deploy.yml'
   workflow_dispatch:
 
 env:
   AWS_REGION: ap-south-1
-  ECR_REPOSITORY: devops-assignment-backend
+  ECR_REPOSITORY: ${{ secrets.AWS_ECR_REPOSITORY }}
   TARGET_ENV: dev
+  ECS_TASK_DEFINITION: devops-assignment-backend  # Task definition family name
 
 jobs:
   deploy:
@@ -33,6 +39,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # ============ BACKEND DEPLOYMENT (with A's versioning) ============
       - name: Build and push backend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -46,16 +53,70 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      - name: Build and deploy frontend
-        env:
-          NEXT_PUBLIC_API_URL: https://${{ secrets.AWS_ALB_DNS_NAME }}
+      # ECS Task Definition versioning (like in A)
+      - name: Get current task definition
         run: |
-          cd frontend
-          npm ci
-          npm run build
-          aws s3 sync out s3://${{ secrets.AWS_S3_BUCKET_NAME }} --delete
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'taskDefinition' > task-def-full.json
 
-      - name: Invalidate CloudFront
+      - name: Clean task definition for re-registration
+        run: |
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' task-def-full.json > task-def-clean.json
+          cat task-def-clean.json
+
+      - name: Update image in task definition
+        run: |
+          jq ".containerDefinitions[0].image = \"${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}\"" task-def-clean.json > task-def-updated.json
+          cat task-def-updated.json
+
+      - name: Register new task definition
+        run: |
+          aws ecs register-task-definition \
+            --cli-input-json file://task-def-updated.json \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Update ECS service
+        env:
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}
+        run: |
+          echo "Updating ECS service: $SERVICE with new task definition"
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Wait for ECS service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ secrets.AWS_ECS_CLUSTER_NAME }} \
+            --services ${{ secrets.AWS_ECS_SERVICE_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
+      # ============ FRONTEND DEPLOYMENT (like A) ============
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm install
+
+      - name: Build frontend
+        working-directory: ./frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://${{ secrets.AWS_ALB_DNS_NAME }}
+        run: npm run build
+
+      - name: Upload frontend to S3
+        run: |
+          aws s3 sync ./frontend/out s3://${{ secrets.AWS_S3_BUCKET_NAME }}/ --delete
+
+      - name: Invalidate CloudFront cache
         env:
           DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
@@ -66,24 +127,14 @@ jobs:
               --paths "/*"
           fi
 
-      - name: Update ECS service
-        env:
-          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}
-          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}
-        run: |
-          echo "Updating ECS service: $SERVICE"
-          aws ecs update-service \
-            --cluster $CLUSTER \
-            --service $SERVICE \
-            --force-new-deployment
-
+      # ============ HEALTH CHECK ============
       - name: Health check
         env:
           ALB_DNS: ${{ secrets.AWS_ALB_DNS_NAME }}
         run: |
           echo "Health checking: http://$ALB_DNS/api/health"
           for i in {1..30}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health")
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health" || echo "000")
             if [ "$HTTP_CODE" -eq 200 ]; then
               echo "✅ Backend is healthy"
               exit 0
@@ -94,6 +145,7 @@ jobs:
           echo "❌ Backend health check failed"
           exit 1
 
+      # ============ NOTIFICATIONS ============
       - name: Deployment Summary
         if: always()
         run: |
@@ -105,6 +157,7 @@ jobs:
           echo "| **Frontend CDN** | https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **S3 Bucket** | ${{ secrets.AWS_S3_BUCKET_NAME }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit SHA** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Task Definition** | ${{ env.ECS_TASK_DEFINITION }}:${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify success
         if: success()
