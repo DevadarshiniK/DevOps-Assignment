@@ -138,7 +138,7 @@ resource "aws_ecs_service" "backend" {
     container_port   = var.backend_port
   }
 
-  depends_on = [aws_lb_listener.backend]
+  depends_on = [aws_lb_listener.https]
 
   tags = {
     Name = "${var.project_name}-service"
