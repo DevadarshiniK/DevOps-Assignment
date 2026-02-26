@@ -3,18 +3,24 @@ name: Deploy to AWS Dev
 on:
   push:
     branches:
-      - develop  # Only triggers on develop branch
-  workflow_dispatch:  # Manual trigger
+      - develop
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'infrastructure/docker/**'
+      - '.github/workflows/aws-deploy.yml'
+  workflow_dispatch:
 
 env:
   AWS_REGION: ap-south-1
   ECR_REPOSITORY: devops-assignment-backend
-  TARGET_ENV: dev  # Fixed to dev
+  TARGET_ENV: dev
+  ECS_TASK_DEFINITION: devops-assignment-backend
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev  # Uses your existing dev environment secrets
+    environment: dev
     permissions:
       contents: read
       id-token: write
@@ -33,6 +39,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # ============ BACKEND DEPLOYMENT ============
       - name: Build and push backend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -45,50 +52,106 @@ jobs:
             .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+      # ECS Task Definition versioning
+      - name: Get current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+            --region ${{ env.AWS_REGION }} \
+            --query taskDefinition > task-def.json
+
+      - name: Filter task definition for registration
+        run: |
+          jq '{ 
+            family: .family,
+            taskRoleArn: .taskRoleArn,
+            executionRoleArn: .executionRoleArn,
+            networkMode: .networkMode,
+            containerDefinitions: .containerDefinitions,
+            requiresCompatibilities: .requiresCompatibilities,
+            cpu: .cpu,
+            memory: .memory,
+            placementConstraints: .placementConstraints,
+            volumes: .volumes
+          }' task-def.json > task-def-filtered.json
+
+      - name: Update image in task definition
+        run: |
+          jq ".containerDefinitions[0].image = \"${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}\"" task-def-filtered.json > task-def-updated.json
+          cat task-def-updated.json
+
+      - name: Register new task definition
+        id: register-task-def
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://task-def-updated.json \
+            --region ${{ env.AWS_REGION }} \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "task-def-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "Registered new task definition: $TASK_DEF_ARN"
+
+      - name: Update ECS service
+        env:
+          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}
+          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}
+        run: |
+          echo "Updating ECS service: $SERVICE with new task definition"
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service $SERVICE \
+            --task-definition ${{ steps.register-task-def.outputs.task-def-arn }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Wait for task to start
+        run: |
+          sleep 30
+          aws ecs describe-services \
+            --cluster ${{ secrets.AWS_ECS_CLUSTER_NAME }} \
+            --services ${{ secrets.AWS_ECS_SERVICE_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].{Status: status, RunningCount: runningCount, DesiredCount: desiredCount}'
+
+      # ============ FRONTEND DEPLOYMENT ============
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm install
 
       - name: Build frontend
-        run: |
-          cd frontend
-          npm ci
-          npm run build
-
-      - name: Deploy frontend to S3
+        working-directory: ./frontend
         env:
-          S3_BUCKET: ${{ secrets.AWS_S3_BUCKET_NAME }}  # Your existing secret
-        run: |
-          echo "Deploying to S3 bucket: $S3_BUCKET"
-          aws s3 sync frontend/out s3://$S3_BUCKET --delete
+          NEXT_PUBLIC_API_URL: http://${{ secrets.AWS_ALB_DNS_NAME }}
+        run: npm run build
 
-      - name: Invalidate CloudFront
+      - name: Upload frontend to S3
+        run: |
+          aws s3 sync ./frontend/out s3://${{ secrets.AWS_S3_BUCKET_NAME }}/ --delete
+
+      - name: Invalidate CloudFront cache
         env:
-          DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}  # Your existing secret
+          DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           if [ -n "$DISTRIBUTION_ID" ]; then
             echo "Invalidating CloudFront distribution: $DISTRIBUTION_ID"
             aws cloudfront create-invalidation \
-              --distribution-id $DISTRIBUTION_ID \
+              --distribution-id "$DISTRIBUTION_ID" \
               --paths "/*"
           fi
 
-      - name: Update ECS service
-        env:
-          CLUSTER: ${{ secrets.AWS_ECS_CLUSTER_NAME }}  # Your existing secret
-          SERVICE: ${{ secrets.AWS_ECS_SERVICE_NAME }}  # Your existing secret
-        run: |
-          echo "Updating ECS service: $SERVICE"
-          aws ecs update-service \
-            --cluster $CLUSTER \
-            --service $SERVICE \
-            --force-new-deployment
-
+      # ============ HEALTH CHECK ============
       - name: Health check
         env:
-          ALB_DNS: ${{ secrets.AWS_ALB_DNS_NAME }}  # Your existing secret
+          ALB_DNS: ${{ secrets.AWS_ALB_DNS_NAME }}
         run: |
           echo "Health checking: http://$ALB_DNS/api/health"
           for i in {1..30}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health")
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB_DNS/api/health" 2>/dev/null || echo "000")
             if [ "$HTTP_CODE" -eq 200 ]; then
               echo "✅ Backend is healthy"
               exit 0
@@ -99,6 +162,7 @@ jobs:
           echo "❌ Backend health check failed"
           exit 1
 
+      # ============ NOTIFICATIONS ============
       - name: Deployment Summary
         if: always()
         run: |
@@ -107,16 +171,20 @@ jobs:
           echo "| Resource | URL/Name |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|----------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Backend API** | http://${{ secrets.AWS_ALB_DNS_NAME }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Frontend CDN** | ${{ secrets.AWS_CDN_ENDPOINT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Frontend CDN** | https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **S3 Bucket** | ${{ secrets.AWS_S3_BUCKET_NAME }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit SHA** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          
+          echo "| **Image Tag** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Task Definition** | ${{ steps.register-task-def.outputs.task-def-arn }} |" >> $GITHUB_STEP_SUMMARY
+
       - name: Notify success
         if: success()
         run: |
           echo "✅ Dev deployment successful!"
           echo "Backend URL: http://${{ secrets.AWS_ALB_DNS_NAME }}"
-          echo "Frontend URL: ${{ secrets.AWS_CDN_ENDPOINT }}"
+          echo "Frontend URL: https://${{ secrets.AWS_CLOUDFRONT_DOMAIN }}"
+          echo "Image Tag: ${{ github.sha }}"
+          echo "Task Definition: ${{ steps.register-task-def.outputs.task-def-arn }}"
 
       - name: Notify failure
         if: failure()

@@ -1,0 +1,72 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": [
+                "ecr:GetAuthorizationToken"
+            ],
+            "Effect": "Allow",
+            "Resource": "*",
+            "Sid": "ECRAuth"
+        },
+        {
+            "Action": [
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:PutImage",
+                "ecr:InitiateLayerUpload",
+                "ecr:UploadLayerPart",
+                "ecr:CompleteLayerUpload"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:ecr:ap-south-1:117204716629:repository/devops-assignment-backend",
+            "Sid": "ECRPush"
+        },
+        {
+            "Action": [
+                "ecs:UpdateService",
+                "ecs:DescribeServices",
+                "ecs:DescribeTaskDefinition",
+                "ecs:DescribeTasks",
+                "ecs:ListTasks",
+                "ecs:RegisterTaskDefinition"
+            ],
+            "Effect": "Allow",
+            "Resource": "*",
+            "Sid": "ECSUpdate"
+        },
+        {
+            "Action": [
+                "iam:PassRole"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:iam::117204716629:role/devops-assignment-ecs-task-execution-dev",
+                "arn:aws:iam::117204716629:role/devops-assignment-ecs-task-dev"
+            ],
+            "Sid": "PassRole"
+        },
+        {
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:ListBucket",
+                "s3:DeleteObject"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:s3:::devops-assignment-frontend-dev-117204716629",
+                "arn:aws:s3:::devops-assignment-frontend-dev-117204716629/*"
+            ],
+            "Sid": "S3Deploy"
+        },
+        {
+            "Action": [
+                "cloudfront:CreateInvalidation"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:cloudfront::117204716629:distribution/E1XE8C24J4XMBA",
+            "Sid": "CloudFrontInvalidate"
+        }
+    ]
+}
